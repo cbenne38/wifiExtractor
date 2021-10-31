@@ -21,6 +21,23 @@ print("Please enter the name of the log file you want to extract from.")
 
 log = open(get_file(), 'r')
 
+
+# Cleans time chunk data up for final export
+def chunk_cleanup(c_s, mins):
+    # Generate name based on time chunk in minutes, then update current chunk by the step amount
+    chunk_name = c_s.__str__() + "-" + (c_s + mins).__str__()
+    c_s = c_s + mins
+    # Tally up the total devices in the time chunk, then assign to the chunk list
+    total_devices = 0
+    for building in building_list['buildings']:
+        total_devices += building_list['buildings'][building]['device_count']
+        # Remove the mac list to drastically reduce the file size and clean it up
+        building_list['buildings'][building].pop('mac_list')
+        building_list['total_devices'] = total_devices
+    return chunk_name, c_s
+
+
+# Variables for chunk list
 match_strings = ['Assoc success', 'Disassoc from sta']  # 'Auth', 'Deauth' (Different possible string matches)
 
 date = ''
@@ -31,12 +48,14 @@ current_step = 0
 
 building_list = {'total_devices': 0, 'buildings': {}}
 chunk_list = {}
+# End Variables
+
 for line in log:
-    # Only check lines for events we care about
+    # Only check lines for events we care about (assoc and disassoc)
     if any(s in line for s in match_strings):
         # Extract date from log only once per log
         if date == '':
-            date = line[0:5]
+            date = re.sub(' +', ' ', line[0:6])
 
         # Extract time from line
         time = line[7:15]
@@ -44,11 +63,12 @@ for line in log:
 
         # Compare time to start time to establish if it is within the chunk or has exceeded
         time_delta = time - start_time
-        # If it has exceeded the chunk step, add the current chunk data and reset
         if time_delta >= time_step:
-            name = current_step.__str__() + "-" + (current_step + minutes).__str__()
-            current_step = current_step + minutes
+            # Adds final touches to chunk then adds it to the list
+            name, current_step = chunk_cleanup(current_step, minutes)
             chunk_list[name] = building_list
+
+            # Reset the building list and start time to reflect a new time chunk forming
             building_list = {'total_devices': 0, 'buildings': {}}
             start_time = time
 
@@ -64,36 +84,35 @@ for line in log:
         ap = re.search('AP (.+?)-AP', line)
         if ap:
             ap = ap.group(1)
+
             # Check for dashes and remove them to get raw AP name
             strip_index = ap.rfind('-')
             if strip_index != -1:
                 ap = ap[(strip_index + 1):]
+
+            # Updates these random AP names which don't follow standard formatting for some reason
             if ap in ['LF', 'RF']:
                 ap = 'Phil'
-            # Remove any extraneous numbers to get raw building name
+
+            # Remove any extraneous numbers to get raw building names
             building = re.search('(^\D+)', ap).group(1)
+
+            # Adds or updates building list
             if building in building_list['buildings']:
                 if mac not in building_list['buildings'][building]['mac_list']:
                     building_list['buildings'][building]['device_count'] += 1
                     building_list['buildings'][building]['mac_list'].append(mac)
             else:
                 building_list['buildings'][building] = {'device_count': 1, 'mac_list': [mac]}
+
 # Add the final chunk not covered by the loop
-name = current_step.__str__() + "-" + (current_step + minutes).__str__()
-current_step = current_step + minutes
+name, current_step = chunk_cleanup(current_step, minutes)
 chunk_list[name] = building_list
 
 log.close()
 
-for chunk in chunk_list:
-    total_devices = 0
-    for building in chunk_list[chunk]['buildings']:
-        total_devices += chunk_list[chunk]['buildings'][building]['device_count']
-        chunk_list[chunk]['buildings'][building].pop('mac_list')
-    chunk_list[chunk]['total_devices'] = total_devices
-
 # Dump chunk array to json for export (will be replaced by database)
-with open('timechunks.txt', 'w') as outfile:
+with open(date + '.json', 'w') as outfile:
     json.dump(chunk_list, outfile, indent=4)
 
 print("Log file has been processed and the data has been exported!")
